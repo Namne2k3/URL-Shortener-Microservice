@@ -5,9 +5,11 @@ const bodyParser = require('body-parser');
 const app = express();
 const dns = require('dns')
 const shortId = require('shortid');
+const connectDB = require('./connectDB')
+const url = require('url')
 // Basic Configuration
 const port = process.env.PORT || 3000;
-
+const URL_Model = require('./models/Url')
 app.use(cors());
 
 app.use('/public', express.static(`${process.cwd()}/public`));
@@ -24,52 +26,52 @@ app.get('/api/shorturl', function (req, res) {
   res.json({ greeting: "Hello World" })
 });
 
-const urls = {};
-app.get('/api/shorturl/:short_url', function (req, res) {
-  // console.log("Check req.params", req.params.short_url);
+app.get('/api/shorturl/:short_url', async function (req, res) {
+  const shortUrl = req.params.short_url
+  const findUrl = await URL_Model.findOne({ short_url: +shortUrl })
+  res.redirect(findUrl?.original_url)
+})
 
-  const longUrl = urls[req.params.short_url]
-
-  if (longUrl) {
-    console.log("Redirecting to:", longUrl);
-
-    // Check if the long URL starts with a protocol (http:// or https://)
-    if (longUrl.startsWith('http://') || longUrl.startsWith('https://')) {
-      res.redirect(longUrl);
-    } else {
-      // If not, assume it's an external URL and prepend 'http://' to it
-      res.redirect(`http://${longUrl}`);
+function middleWare(req, res, next) {
+  const inputUrl = req.body.url
+  const parsedUrl = new URL(inputUrl)
+  dns.lookup(parsedUrl.hostname, function (err, addresses) {
+    if (!addresses) {
+      res.json({ error: 'invalid url' })
     }
-  } else {
-    res.json({ error: 'Short URL not found' });
+
+    req.body.url = parsedUrl
+    next();
+  })
+
+}
+
+app.post('/api/shorturl', middleWare, async function (req, res) {
+  try {
+    const countUrl = await URL_Model.countDocuments({})
+    const URLData = {
+      original_url: req.body.url,
+      short_url: countUrl
+    }
+
+    const newURL = await URL_Model.create(URLData)
+    await newURL.save()
+
+    res.json({
+      original_url: newURL.original_url,
+      short_url: newURL.short_url
+    });
+
+  } catch (err) {
+    res.json({
+      error: err.message
+    })
   }
 })
 
 
-function middleWare(req, res, next) {
-  dns.lookup(req.body?.url, function (err, addresses) {
-    if (err) {
-      res.json({ error: 'invalid url' })
-    }
-    const id = shortId.generate()
-    req.body.short_url = id
-    urls[id] = req.body?.url
 
-    console.log("Check req.body >>> ", req.body);
-    next();
-  })
-}
-
-app.post('/api/shorturl', middleWare, function (req, res) {
-
-  res.json({
-    original_url: req.body?.url,
-    short_url: req.body.short_url
-  });
-})
-
-
-
-app.listen(port, function () {
+app.listen(port, async function () {
+  await connectDB();
   console.log(`Listening on port ${port}`);
 });
